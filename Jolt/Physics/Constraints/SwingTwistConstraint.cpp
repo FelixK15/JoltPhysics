@@ -1,4 +1,3 @@
-// Jolt Physics Library (https://github.com/jrouwe/JoltPhysics)
 // SPDX-FileCopyrightText: 2021 Jorrit Rouwe
 // SPDX-License-Identifier: MIT
 
@@ -520,5 +519,106 @@ Ref<ConstraintSettings> SwingTwistConstraint::GetConstraintSettings() const
 	settings->mTwistMotorSettings = mTwistMotorSettings;
 	return settings;
 }
+
+bool SwingTwistConstraint::sSolveVelocityConstraintsBatched(Constraint** inActiveConstraints, const uint32 inConstraintCount, float inDeltaTime)
+{
+	bool impulse = false;
+
+	const int simdCount = inConstraintCount / 8;
+	const int simdRemainder = inConstraintCount % 8;
+	int constraintIndex = 0;
+
+	__m256 deltaTimeWide = _mm256_set1_ps(inDeltaTime);
+
+	for(int i = 0; i < simdCount; ++i, constraintIndex += 8)
+	{
+		SwingTwistConstraint* swigTwistConstraints[8];
+		Body* bodies1[8];
+		Body* bodies2[8];
+		AngleConstraintPart* angleConstraintParts[3][8];
+		Vec3 worldSpaceMotorAxes[3][8];
+		SwingTwistConstraintPart* swingConstraintParts[8];
+		PointConstraintPart* pointConstraintParts[8];
+		float maxFrictionTorques[8];
+		float maxTwistMotorTorqueLimits[8];
+		float minTwistMotorTorqueLimits[8];
+		int twistMotorStates[8];
+
+		for(int j = 0; j < 8; ++j)
+		{
+			if(j < 7) {
+				constexpr int prefetchHint = _MM_HINT_T2;
+				swigTwistConstraints[j+1] = (SwingTwistConstraint*)inActiveConstraints[constraintIndex + j + 1];
+				_mm_prefetch((const char*)swigTwistConstraints[j+1]->mBody1, prefetchHint);
+				_mm_prefetch((const char*)swigTwistConstraints[j+1]->mBody2, prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mMotorConstraintPart[0], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mMotorConstraintPart[1], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mMotorConstraintPart[2], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mWorldSpaceMotorAxis[0], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mWorldSpaceMotorAxis[1], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mWorldSpaceMotorAxis[2], prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mSwingTwistConstraintPart, prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mPointConstraintPart, prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mMaxFrictionTorque, prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mTwistMotorState, prefetchHint);
+				_mm_prefetch((const char*)&swigTwistConstraints[j+1]->mTwistMotorSettings, prefetchHint);
+			}
+
+			swigTwistConstraints[j] = (SwingTwistConstraint*)inActiveConstraints[constraintIndex + j];
+			bodies1[j] = swigTwistConstraints[j]->mBody1;
+			bodies2[j] = swigTwistConstraints[j]->mBody2;
+			angleConstraintParts[0][j] = &swigTwistConstraints[j]->mMotorConstraintPart[0];
+			angleConstraintParts[1][j] = &swigTwistConstraints[j]->mMotorConstraintPart[1];
+			angleConstraintParts[2][j] = &swigTwistConstraints[j]->mMotorConstraintPart[2];
+			worldSpaceMotorAxes[0][j] = swigTwistConstraints[j]->mWorldSpaceMotorAxis[0];
+			worldSpaceMotorAxes[1][j] = swigTwistConstraints[j]->mWorldSpaceMotorAxis[1];
+			worldSpaceMotorAxes[2][j] = swigTwistConstraints[j]->mWorldSpaceMotorAxis[2];
+			swingConstraintParts[j] = &swigTwistConstraints[j]->mSwingTwistConstraintPart;
+			pointConstraintParts[j] = &swigTwistConstraints[j]->mPointConstraintPart;
+			maxFrictionTorques[j] = swigTwistConstraints[j]->mMaxFrictionTorque;
+			twistMotorStates[j] = (int)swigTwistConstraints[j]->mTwistMotorState;
+			maxTwistMotorTorqueLimits[j] = swigTwistConstraints[j]->mTwistMotorSettings.mMaxTorqueLimit;
+			minTwistMotorTorqueLimits[j] = swigTwistConstraints[j]->mTwistMotorSettings.mMinTorqueLimit;
+		}
+
+		__m256 maxTwistLimitMotorStateOff = _mm256_load_ps(maxFrictionTorques);
+		__m256 minTwistLimitMotorStateOff = _mm256_mul_ps(maxTwistLimitMotorStateOff,_mm256_set1_ps(-1.0f));
+		__m256 maxTwistLimitMotorStateOn = _mm256_load_ps(maxTwistMotorTorqueLimits);
+		__m256 minTwistLimitMotorStateOn = _mm256_load_ps(minTwistMotorTorqueLimits);
+
+		__m256i twistMotorStateMask = _mm256_maskload_epi32(twistMotorStates, _mm256_set1_epi32(0xFFFFFFFF));
+		twistMotorStateMask = _mm256_cmpgt_epi32(twistMotorStateMask, _mm256_set1_epi32((int)EMotorState::Off));
+
+		__m256 minLambdaWide = _mm256_mul_ps(deltaTimeWide, _mm256_blendv_ps(minTwistLimitMotorStateOff, minTwistLimitMotorStateOn, _mm256_castsi256_ps(twistMotorStateMask)));
+		__m256 maxLambdaWide = _mm256_mul_ps(deltaTimeWide, _mm256_blendv_ps(maxTwistLimitMotorStateOff, maxTwistLimitMotorStateOn, _mm256_castsi256_ps(twistMotorStateMask)));
+
+		float minLambdas[8];
+		float maxLambdas[8];
+
+		_mm256_store_ps(minLambdas, minLambdaWide);
+		_mm256_store_ps(maxLambdas, maxLambdaWide);
+
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(angleConstraintParts[0], bodies1, bodies2, worldSpaceMotorAxes[0], minLambdas, maxLambdas);
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(angleConstraintParts[1], bodies1, bodies2, worldSpaceMotorAxes[1], minLambdas, maxLambdas);
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(angleConstraintParts[2], bodies1, bodies2, worldSpaceMotorAxes[2], minLambdas, maxLambdas);
+
+		impulse |= SwingTwistConstraintPart::sSolveVelocityConstraintsBatched8(swingConstraintParts, bodies1, bodies2);
+
+		//TODO SIMDfy:
+		for(int j = 0; j < 8; ++j)
+		{
+			pointConstraintParts[j]->SolveVelocityConstraint(*bodies1[j],*bodies2[j]);
+		}
+	}
+
+	for(int i = 0; i < simdRemainder; ++i, ++constraintIndex)
+	{
+		SwingTwistConstraint* pSwingTwistConstraint = (SwingTwistConstraint*)inActiveConstraints[constraintIndex];
+		impulse |= pSwingTwistConstraint->SolveVelocityConstraint(inDeltaTime);
+	}
+
+	return impulse;
+}
+
 
 JPH_NAMESPACE_END

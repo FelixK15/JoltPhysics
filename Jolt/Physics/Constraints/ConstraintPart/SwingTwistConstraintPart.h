@@ -484,6 +484,41 @@ public:
 		return impulse;
 	}
 
+	static bool					sSolveVelocityConstraintsBatched8(SwingTwistConstraintPart** inConstraintParts, Body** ioBody1,Body** ioBody2)
+	{
+		bool impulse = false;
+
+		AngleConstraintPart* constraintParts[3][8];
+		Vec3 worldSpaceSwingLimitYRotationAxis[8];
+		Vec3 worldSpaceSwingLimitZRotationAxis[8];
+		Vec3 worldSpaceTwistLimitRotationAxis[8];
+
+		float lambdaMin[8] = {-FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX};
+		float lambdaMax[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+		for(int i = 0; i < 8; ++i)
+		{
+			constraintParts[0][i] = &inConstraintParts[i]->mSwingLimitYConstraintPart;
+			constraintParts[1][i] = &inConstraintParts[i]->mSwingLimitZConstraintPart;
+			constraintParts[2][i] = &inConstraintParts[i]->mTwistLimitConstraintPart;
+
+			worldSpaceSwingLimitYRotationAxis[i] = inConstraintParts[i]->mWorldSpaceSwingLimitYRotationAxis;
+			worldSpaceSwingLimitZRotationAxis[i] = inConstraintParts[i]->mWorldSpaceSwingLimitZRotationAxis;
+			worldSpaceTwistLimitRotationAxis[i] = inConstraintParts[i]->mWorldSpaceTwistLimitRotationAxis;
+
+			if(inConstraintParts[i]->mSinSwingYHalfMinAngle == inConstraintParts[i]->mSinSwingYHalfMaxAngle)
+			{
+				lambdaMax[i] = FLT_MAX;
+			}
+		}
+
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(constraintParts[0], ioBody1, ioBody2, worldSpaceSwingLimitYRotationAxis, lambdaMin, lambdaMax);
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(constraintParts[1], ioBody1, ioBody2, worldSpaceSwingLimitZRotationAxis, lambdaMin, lambdaMax);
+		impulse |= AngleConstraintPart::sSolveVelocityConstraintsBatched8(constraintParts[2], ioBody1, ioBody2, worldSpaceTwistLimitRotationAxis, lambdaMin, lambdaMax);
+
+		return impulse;
+	}
+
 	/// Iteratively update the position constraint. Makes sure C(...) = 0.
 	/// @param ioBody1 The first body that this constraint is attached to
 	/// @param ioBody2 The second body that this constraint is attached to

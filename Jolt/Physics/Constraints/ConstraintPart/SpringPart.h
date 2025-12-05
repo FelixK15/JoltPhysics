@@ -161,6 +161,16 @@ public:
 		return mSoftness * inTotalLambda + mBias;
 	}
 
+	inline float				GetSoftness() const
+	{
+		return mSoftness;
+	}
+
+	inline float				GetBias() const
+	{
+		return mBias;
+	}		
+
 private:
 	float						mBias  = 0.0f;
 	float						mSoftness  = 0.0f;

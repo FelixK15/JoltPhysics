@@ -72,6 +72,151 @@ class AngleConstraintPart
 	}
 
 public:
+	static bool sSolveVelocityConstraintsBatched8(AngleConstraintPart** inActiveConstraints, Body** inBodies1, Body** inBodies2, Vec3* inWorldSpaceMotorAxis, float* minLambdas, float* maxLambdas)
+	{
+		float effectiveMasses[8];
+		float bodyMotionTypes[2][8];
+
+		for(int i = 0; i < 8; ++i)
+		{
+			effectiveMasses[i] = inActiveConstraints[i]->GetEffectiveMass();
+			bodyMotionTypes[0][i] = (float)inBodies1[i]->GetMotionType();
+			bodyMotionTypes[1][i] = (float)inBodies2[i]->GetMotionType();
+		}
+
+		__m256 motorConstraintPart0EffectiveMass = _mm256_load_ps(effectiveMasses);
+
+		__m256 body1MotionType = _mm256_load_ps(bodyMotionTypes[0]);
+		__m256 body2MotionType = _mm256_load_ps(bodyMotionTypes[1]);
+
+		body1MotionType = _mm256_blendv_ps(_mm256_set1_ps(1.0f), _mm256_set1_ps(0.0f), _mm256_cmp_ps(body1MotionType, _mm256_set1_ps((float)EMotionType::Dynamic), _CMP_EQ_UQ));
+		body2MotionType = _mm256_blendv_ps(_mm256_set1_ps(1.0f), _mm256_set1_ps(0.0f), _mm256_cmp_ps(body2MotionType, _mm256_set1_ps((float)EMotionType::Dynamic), _CMP_EQ_UQ));
+
+		if(_mm256_movemask_ps(motorConstraintPart0EffectiveMass) == 0 || (_mm256_movemask_ps(body1MotionType) == 0 && _mm256_movemask_ps(body2MotionType) == 0)) //msb is sign? debug this!
+		{
+			return false;
+		}
+
+		float angularVelocitiesX[2][8];
+		float angularVelocitiesY[2][8];
+		float angularVelocitiesZ[2][8];
+		float inverseEffectiveMassAxisX[2][8];
+		float inverseEffectiveMassAxisY[2][8];
+		float inverseEffectiveMassAxisZ[2][8];
+		float springBiases[8];
+		float springSoftnesses[8];
+		float totalLambdas[8];
+		float motorWorldSpaceMotorAxisX[8];
+		float motorWorldSpaceMotorAxisY[8];
+		float motorWorldSpaceMotorAxisZ[8];
+		for(int i = 0; i < 8; ++i)
+		{
+			angularVelocitiesX[0][i] = inBodies1[i]->GetAngularVelocity().GetX();
+			angularVelocitiesY[0][i] = inBodies1[i]->GetAngularVelocity().GetY();
+			angularVelocitiesZ[0][i] = inBodies1[i]->GetAngularVelocity().GetZ();
+			angularVelocitiesX[1][i] = inBodies2[i]->GetAngularVelocity().GetX();
+			angularVelocitiesY[1][i] = inBodies2[i]->GetAngularVelocity().GetY();
+			angularVelocitiesZ[1][i] = inBodies2[i]->GetAngularVelocity().GetZ();
+			inverseEffectiveMassAxisX[0][i] = inActiveConstraints[i]->mInvI1_Axis.GetX();
+			inverseEffectiveMassAxisY[0][i] = inActiveConstraints[i]->mInvI1_Axis.GetY();
+			inverseEffectiveMassAxisZ[0][i] = inActiveConstraints[i]->mInvI1_Axis.GetZ();
+			inverseEffectiveMassAxisX[1][i] = inActiveConstraints[i]->mInvI2_Axis.GetX();
+			inverseEffectiveMassAxisY[1][i] = inActiveConstraints[i]->mInvI2_Axis.GetY();
+			inverseEffectiveMassAxisZ[1][i] = inActiveConstraints[i]->mInvI2_Axis.GetZ();
+			springBiases[i] = inActiveConstraints[i]->mSpringPart.GetBias();
+			springSoftnesses[i] = inActiveConstraints[i]->mSpringPart.GetSoftness();
+			totalLambdas[i] = inActiveConstraints[i]->mTotalLambda;
+			motorWorldSpaceMotorAxisX[i] = inWorldSpaceMotorAxis[i].GetX();
+			motorWorldSpaceMotorAxisY[i] = inWorldSpaceMotorAxis[i].GetY();
+			motorWorldSpaceMotorAxisZ[i] = inWorldSpaceMotorAxis[i].GetZ();
+		}
+
+		__m256 body1AngularVelocityX = _mm256_load_ps(angularVelocitiesX[0]);
+		__m256 body1AngularVelocityY = _mm256_load_ps(angularVelocitiesY[0]);
+		__m256 body1AngularVelocityZ = _mm256_load_ps(angularVelocitiesZ[0]);
+
+		__m256 body2AngularVelocityX = _mm256_load_ps(angularVelocitiesX[1]);
+		__m256 body2AngularVelocityY = _mm256_load_ps(angularVelocitiesY[1]);
+		__m256 body2AngularVelocityZ = _mm256_load_ps(angularVelocitiesZ[1]);
+
+		__m256 invEffectiveMass1X = _mm256_load_ps(inverseEffectiveMassAxisX[0]);
+		__m256 invEffectiveMass1Y = _mm256_load_ps(inverseEffectiveMassAxisY[0]);
+		__m256 invEffectiveMass1Z = _mm256_load_ps(inverseEffectiveMassAxisZ[0]);
+
+		__m256 invEffectiveMass2X = _mm256_load_ps(inverseEffectiveMassAxisX[1]);
+		__m256 invEffectiveMass2Y = _mm256_load_ps(inverseEffectiveMassAxisY[1]);
+		__m256 invEffectiveMass2Z = _mm256_load_ps(inverseEffectiveMassAxisZ[1]);
+
+		__m256 minLambda = _mm256_load_ps(minLambdas);
+		__m256 maxLambda = _mm256_load_ps(maxLambdas);
+
+		__m256 springBias = _mm256_load_ps(springBiases);
+		__m256 springSoftness = _mm256_load_ps(springSoftnesses);
+		__m256 totalLambda = _mm256_load_ps(totalLambdas);
+
+		springBias = _mm256_add_ps(springBias,_mm256_mul_ps(springSoftness, totalLambda));
+
+		__m256 motorWorldSpaceMotorAxis0X = _mm256_load_ps(motorWorldSpaceMotorAxisX);
+		__m256 motorWorldSpaceMotorAxis0Y = _mm256_load_ps(motorWorldSpaceMotorAxisY);
+		__m256 motorWorldSpaceMotorAxis0Z = _mm256_load_ps(motorWorldSpaceMotorAxisZ);
+
+		__m256 bodyVelocityDeltaX = _mm256_sub_ps(body2AngularVelocityX, body1AngularVelocityX);
+		__m256 bodyVelocityDeltaY = _mm256_sub_ps(body2AngularVelocityY, body1AngularVelocityY);
+		__m256 bodyVelocityDeltaZ = _mm256_sub_ps(body2AngularVelocityZ, body1AngularVelocityZ);
+		__m256 relativeAngularVelocityAlongMotorAxis = _mm256_add_ps(
+			_mm256_add_ps(
+				_mm256_mul_ps(bodyVelocityDeltaX, motorWorldSpaceMotorAxis0X),
+				_mm256_mul_ps(bodyVelocityDeltaY, motorWorldSpaceMotorAxis0Y)),
+			_mm256_mul_ps(bodyVelocityDeltaZ,motorWorldSpaceMotorAxis0Z));
+
+		__m256 lambda = _mm256_mul_ps(motorConstraintPart0EffectiveMass,
+			_mm256_sub_ps(springBias,relativeAngularVelocityAlongMotorAxis));
+
+		__m256 newLambda = _mm256_add_ps(totalLambda, lambda);
+		newLambda = _mm256_max_ps(newLambda, minLambda);
+		newLambda = _mm256_min_ps(newLambda, maxLambda);
+		lambda = _mm256_sub_ps(newLambda,totalLambda);
+
+		__m256 velocityStepMultiplier = _mm256_blendv_ps(_mm256_set1_ps(0.0f),_mm256_set1_ps(1.0f),_mm256_cmp_ps(lambda, _mm256_set1_ps(0.0f), _CMP_NEQ_UQ));
+		__m256 velocity1StepMultiplier = _mm256_mul_ps(velocityStepMultiplier, body1MotionType);
+		__m256 velocity2StepMultiplier = _mm256_mul_ps(velocityStepMultiplier, body2MotionType);
+
+		__m256 velocityStep1X = _mm256_mul_ps(velocity1StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass1X));
+		__m256 velocityStep1Y = _mm256_mul_ps(velocity1StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass1Y));
+		__m256 velocityStep1Z = _mm256_mul_ps(velocity1StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass1Z));
+
+		__m256 velocityStep2X = _mm256_mul_ps(velocity2StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass2X));
+		__m256 velocityStep2Y = _mm256_mul_ps(velocity2StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass2Y));
+		__m256 velocityStep2Z = _mm256_mul_ps(velocity2StepMultiplier, _mm256_mul_ps(lambda ,invEffectiveMass2Z));
+
+		body1AngularVelocityX = _mm256_sub_ps(body1AngularVelocityX,velocityStep1X);
+		body1AngularVelocityY = _mm256_sub_ps(body1AngularVelocityY,velocityStep1Y);
+		body1AngularVelocityZ = _mm256_sub_ps(body1AngularVelocityZ,velocityStep1Z);
+			
+		body2AngularVelocityX = _mm256_add_ps(body2AngularVelocityX,velocityStep2X);
+		body2AngularVelocityY = _mm256_add_ps(body2AngularVelocityY,velocityStep2Y);
+		body2AngularVelocityZ = _mm256_add_ps(body2AngularVelocityZ,velocityStep2Z);
+
+		_mm256_store_ps(angularVelocitiesX[0], body1AngularVelocityX);
+		_mm256_store_ps(angularVelocitiesY[0], body1AngularVelocityY);
+		_mm256_store_ps(angularVelocitiesZ[0], body1AngularVelocityZ);
+
+		_mm256_store_ps(angularVelocitiesX[1], body2AngularVelocityX);
+		_mm256_store_ps(angularVelocitiesY[1], body2AngularVelocityY);
+		_mm256_store_ps(angularVelocitiesZ[1], body2AngularVelocityZ);
+
+		_mm256_store_ps(totalLambdas, newLambda);
+
+		for (int i = 0; i < 8; ++i)
+		{
+			inActiveConstraints[i]->SetTotalLambda(totalLambdas[i]);
+			inBodies1[i]->SetAngularVelocity(Vec3(angularVelocitiesX[0][i], angularVelocitiesY[0][i], angularVelocitiesZ[0][i]));
+			inBodies2[i]->SetAngularVelocity(Vec3(angularVelocitiesX[1][i], angularVelocitiesY[1][i], angularVelocitiesZ[1][i]));
+		}
+
+		return true;
+	}
+
 	/// Calculate properties used during the functions below
 	/// @param inBody1 The first body that this constraint is attached to
 	/// @param inBody2 The second body that this constraint is attached to
@@ -192,6 +337,11 @@ public:
 		return mTotalLambda;
 	}
 
+	void SetTotalLambda(float inLambda)
+	{
+		mTotalLambda = inLambda;
+	}
+
 	/// Iteratively update the position constraint. Makes sure C(...) == 0.
 	/// @param ioBody1 The first body that this constraint is attached to
 	/// @param ioBody2 The second body that this constraint is attached to
@@ -232,6 +382,26 @@ public:
 		}
 
 		return false;
+	}
+
+	const SpringPart&			GetSpringPart() const
+	{
+		return mSpringPart;
+	}
+
+	float 						GetEffectiveMass() const
+	{
+		return mEffectiveMass;
+	}
+
+	const Vec3& GetInverseEffectiveMass1Axis() const
+	{
+		return mInvI1_Axis;
+	}
+
+	const Vec3& GetInverseEffectiveMass2Axis() const
+	{
+		return mInvI2_Axis;
 	}
 
 	/// Save state of this constraint part

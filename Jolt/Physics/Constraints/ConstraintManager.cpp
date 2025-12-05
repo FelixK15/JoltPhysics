@@ -6,6 +6,7 @@
 
 #include <Jolt/Physics/Constraints/ConstraintManager.h>
 #include <Jolt/Physics/Constraints/CalculateSolverSteps.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/IslandBuilder.h>
 #include <Jolt/Physics/StateRecorder.h>
 #include <Jolt/Physics/PhysicsLock.h>
@@ -140,6 +141,7 @@ void ConstraintManager::sWarmStartVelocityConstraints(Constraint **inActiveConst
 template void ConstraintManager::sWarmStartVelocityConstraints<CalculateSolverSteps>(Constraint **inActiveConstraints, const uint32 *inConstraintIdxBegin, const uint32 *inConstraintIdxEnd, float inWarmStartImpulseRatio, CalculateSolverSteps &ioCallback);
 template void ConstraintManager::sWarmStartVelocityConstraints<DummyCalculateSolverSteps>(Constraint **inActiveConstraints, const uint32 *inConstraintIdxBegin, const uint32 *inConstraintIdxEnd, float inWarmStartImpulseRatio, DummyCalculateSolverSteps &ioCallback);
 
+#if 0
 bool ConstraintManager::sSolveVelocityConstraints(Constraint **inActiveConstraints, const uint32 *inConstraintIdxBegin, const uint32 *inConstraintIdxEnd, float inDeltaTime)
 {
 	JPH_PROFILE_FUNCTION();
@@ -154,6 +156,56 @@ bool ConstraintManager::sSolveVelocityConstraints(Constraint **inActiveConstrain
 
 	return any_impulse_applied;
 }
+#else
+static bool sSolveVelocityConstraintsBatched(const EConstraintSubType constraintSubType, Constraint** inActiveConstraints, const uint32 inConstraintCount, float inDeltaTime)
+{
+	if(constraintSubType == EConstraintSubType::SwingTwist)
+	{
+		return SwingTwistConstraint::sSolveVelocityConstraintsBatched(inActiveConstraints, inConstraintCount, inDeltaTime);
+	}
+
+	JPH_BREAKPOINT;
+	return false;
+}
+
+bool ConstraintManager::sSolveVelocityConstraints(Constraint **inActiveConstraints, const uint32 *inConstraintIdxBegin, const uint32 *inConstraintIdxEnd, float inDeltaTime)
+{
+	JPH_PROFILE_FUNCTION();
+
+	bool any_impulse_applied = false;
+
+	constexpr int maxConstraintsBatchSize = 128;
+	constexpr int maxConstraintsSubTypeIndex = (int)EConstraintSubType::User1;
+	int constraintsBatchCounterByType[maxConstraintsSubTypeIndex] = {};
+	Constraint* constraintsBatchesByType[maxConstraintsSubTypeIndex][maxConstraintsBatchSize] = {};
+
+	for (const uint32 *constraint_idx = inConstraintIdxBegin; constraint_idx < inConstraintIdxEnd; ++constraint_idx)
+	{
+		Constraint *c = inActiveConstraints[*constraint_idx];
+		const int constraintsSubTypeIndex = (int)c->GetSubType();
+		const int index = constraintsBatchCounterByType[constraintsSubTypeIndex]++;
+		constraintsBatchesByType[constraintsSubTypeIndex][index] = c;
+
+		if(index == maxConstraintsBatchSize)
+		{
+			any_impulse_applied |= sSolveVelocityConstraintsBatched(c->GetSubType(), constraintsBatchesByType[constraintsSubTypeIndex], maxConstraintsBatchSize, inDeltaTime);
+			constraintsBatchCounterByType[constraintsSubTypeIndex] = 0;
+		}
+	}
+
+	for (uint32 constraintSubTypeIndex = 0; constraintSubTypeIndex < maxConstraintsSubTypeIndex; ++constraintSubTypeIndex)
+	{
+		if(constraintsBatchCounterByType[constraintSubTypeIndex] == 0)
+		{
+			continue;
+		}
+
+		any_impulse_applied |= sSolveVelocityConstraintsBatched((EConstraintSubType)constraintSubTypeIndex, constraintsBatchesByType[constraintSubTypeIndex], constraintsBatchCounterByType[constraintSubTypeIndex], inDeltaTime);
+	}
+
+	return any_impulse_applied;
+}
+#endif
 
 bool ConstraintManager::sSolvePositionConstraints(Constraint **inActiveConstraints, const uint32 *inConstraintIdxBegin, const uint32 *inConstraintIdxEnd, float inDeltaTime, float inBaumgarte)
 {
