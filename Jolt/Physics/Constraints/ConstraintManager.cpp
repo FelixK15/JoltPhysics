@@ -164,7 +164,6 @@ static bool sSolveVelocityConstraintsBatched(const EConstraintSubType constraint
 		return SwingTwistConstraint::sSolveVelocityConstraintsBatched(inActiveConstraints, inConstraintCount, inDeltaTime);
 	}
 
-	JPH_BREAKPOINT;
 	return false;
 }
 

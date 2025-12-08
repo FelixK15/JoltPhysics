@@ -526,9 +526,26 @@ bool SwingTwistConstraint::sSolveVelocityConstraintsBatched(Constraint** inActiv
 
 	const int simdCount = inConstraintCount / 8;
 	const int simdRemainder = inConstraintCount % 8;
+	constexpr int prefetchHint = _MM_HINT_T2;
+
 	int constraintIndex = 0;
 
 	__m256 deltaTimeWide = _mm256_set1_ps(inDeltaTime);
+
+	SwingTwistConstraint* pFirstConstraint = (SwingTwistConstraint*)inActiveConstraints[0];
+	_mm_prefetch((const char*)pFirstConstraint->mBody1, prefetchHint);
+	_mm_prefetch((const char*)pFirstConstraint->mBody2, prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mMotorConstraintPart[0], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mMotorConstraintPart[1], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mMotorConstraintPart[2], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mWorldSpaceMotorAxis[0], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mWorldSpaceMotorAxis[1], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mWorldSpaceMotorAxis[2], prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mSwingTwistConstraintPart, prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mPointConstraintPart, prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mMaxFrictionTorque, prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mTwistMotorState, prefetchHint);
+	_mm_prefetch((const char*)&pFirstConstraint->mTwistMotorSettings, prefetchHint);
 
 	for(int i = 0; i < simdCount; ++i, constraintIndex += 8)
 	{
@@ -547,7 +564,6 @@ bool SwingTwistConstraint::sSolveVelocityConstraintsBatched(Constraint** inActiv
 		for(int j = 0; j < 8; ++j)
 		{
 			if(j < 7) {
-				constexpr int prefetchHint = _MM_HINT_T2;
 				swigTwistConstraints[j+1] = (SwingTwistConstraint*)inActiveConstraints[constraintIndex + j + 1];
 				_mm_prefetch((const char*)swigTwistConstraints[j+1]->mBody1, prefetchHint);
 				_mm_prefetch((const char*)swigTwistConstraints[j+1]->mBody2, prefetchHint);
